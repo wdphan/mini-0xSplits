@@ -11,6 +11,32 @@ pragma solidity ^0.8.13;
  * ERRORS
  */
 
+/// @notice Invalid number of accounts `accountsLength`, must have at least 2
+/// @param accountsLength Length of accounts array
+error InvalidSplit__TooFewAccounts(uint256 accountsLength);
+/// @notice Array lengths of accounts & percentAllocations don't match (`accountsLength` != `allocationsLength`)
+/// @param accountsLength Length of accounts array
+/// @param allocationsLength Length of percentAllocations array
+error InvalidSplit__AccountsAndAllocationsMismatch(
+  uint256 accountsLength,
+  uint256 allocationsLength
+);
+/// @notice Invalid percentAllocations sum `allocationsSum` must equal `PERCENTAGE_SCALE`
+/// @param allocationsSum Sum of percentAllocations array
+error InvalidSplit__InvalidAllocationsSum(uint32 allocationsSum);
+/// @notice Invalid accounts ordering at `index`
+/// @param index Index of out-of-order account
+error InvalidSplit__AccountsOutOfOrder(uint256 index);
+/// @notice Invalid percentAllocation of zero at `index`
+/// @param index Index of zero percentAllocation
+error InvalidSplit__AllocationMustBePositive(uint256 index);
+/// @notice Invalid distributorFee `distributorFee` cannot be greater than 10% (1e5)
+/// @param distributorFee Invalid distributorFee amount
+error InvalidSplit__InvalidDistributorFee(uint32 distributorFee);
+/// @notice Invalid hash `hash` from split data (accounts, percentAllocations, distributorFee)
+/// @param hash Invalid hash
+error InvalidSplit__InvalidHash(bytes32 hash);
+
 contract MainSplit {
 
     /// @notice holds Split metadata
@@ -34,16 +60,40 @@ contract MainSplit {
     address[] internal _payees;
 
 
-//   modifier validSplit(
-//     address[] memory accounts,
-//     uint32[] memory percentAllocations,
-//     uint32 distributorFee
-//   ) {}
-
-//     modifier onlySplitController(address split) {
-//     if (msg.sender != splits[split].controller) revert Unauthorized(msg.sender);
-//     _;
-//   }
+modifier validSplit(
+    address[] memory accounts,
+    uint32[] memory percentAllocations,
+    uint32 distributorFee
+  ) {
+    if (accounts.length < 2)
+      revert InvalidSplit__TooFewAccounts(accounts.length);
+    if (accounts.length != percentAllocations.length)
+      revert InvalidSplit__AccountsAndAllocationsMismatch(
+        accounts.length,
+        percentAllocations.length
+      );
+    // _getSum should overflow if any percentAllocation[i] < 0
+    if (_getSum(percentAllocations) != PERCENTAGE_SCALE)
+      revert InvalidSplit__InvalidAllocationsSum(_getSum(percentAllocations));
+    unchecked {
+      // overflow should be impossible in for-loop index
+      // cache accounts length to save gas
+      uint256 loopLength = accounts.length - 1;
+      for (uint256 i = 0; i < loopLength; ++i) {
+        // overflow should be impossible in array access math
+        if (accounts[i] >= accounts[i + 1])
+          revert InvalidSplit__AccountsOutOfOrder(i);
+        if (percentAllocations[i] == uint32(0))
+          revert InvalidSplit__AllocationMustBePositive(i);
+      }
+      // overflow should be impossible in array access math with validated equal array lengths
+      if (percentAllocations[loopLength] == uint32(0))
+        revert InvalidSplit__AllocationMustBePositive(loopLength);
+    }
+    if (distributorFee > MAX_DISTRIBUTOR_FEE)
+      revert InvalidSplit__InvalidDistributorFee(distributorFee);
+    _;
+  }
 
   /**
    * EVENTS
@@ -206,6 +256,18 @@ function withdrawETH (address split,
     // store new hash in storage for future verification
     splits[split].hash = splitHash;
     emit UpdateSplit(split);
+  }
+
+  function _getSum(uint32[] memory numbers) internal pure returns (uint32 sum) {
+    // overflow should be impossible in for-loop index
+    uint256 numbersLength = numbers.length;
+    for (uint256 i = 0; i < numbersLength; ) {
+      sum += numbers[i];
+      unchecked {
+        // overflow should be impossible in for-loop index
+        ++i;
+      }
+    }
   }
     
 
